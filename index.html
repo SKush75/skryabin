@@ -6,21 +6,23 @@
 <title>Скрябин: картина → музыка</title>
 <style>
   body { margin:0; background:#111; color:#eee; font-family:sans-serif; text-align:center; }
-  video { width:100%; max-width:480px; border-radius:12px; margin-top:12px; }
-  #note { font-size:2em; margin:12px; }
-  #color { width:80px; height:80px; border-radius:50%; display:inline-block; border:2px solid #fff; }
-  button { padding:12px 24px; font-size:1em; border-radius:8px; border:none; background:#4a9; color:#000; margin:8px; }
+  video { width:100%; max-width:400px; border-radius:12px; margin-top:12px; border: 2px solid #333; }
+  #note { font-size:1.5em; margin:12px; height: 30px; font-weight: bold; }
+  #color { width:60px; height:60px; border-radius:50%; display:inline-block; border:2px solid #fff; vertical-align: middle; margin-right: 10px;}
+  button { padding:12px 24px; font-size:1em; border-radius:8px; border:none; background:#4a9; color:#000; margin:8px; font-weight: bold;}
+  #history { font-size: 0.9em; color: #888; margin-top: 10px; }
 </style>
 </head>
 <body>
 <h2>Наведи камеру на картину</h2>
 <video id="cam" autoplay playsinline></video>
-<div>
+<div style="margin-top: 15px;">
   <div id="color"></div>
   <div id="note">—</div>
 </div>
 <button id="start">Включить камеру</button>
 <button id="stop">Стоп</button>
+<div id="history"></div>
 
 <script>
 // Таблица Скрябина: нота → цвет (RGB)
@@ -49,7 +51,36 @@ const FREQ = {
 const video = document.getElementById('cam');
 const noteEl = document.getElementById('note');
 const colorEl = document.getElementById('color');
+const historyEl = document.getElementById('history');
 let stream = null, interval = null, audioCtx = null;
+let history = [];
+
+// Улучшенная функция: ищет самый насыщенный (яркий) цвет, а не просто средний
+function getDominantColor(videoEl) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64; canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(videoEl, 0, 0, 64, 64);
+  const data = ctx.getImageData(0, 0, 64, 64).data;
+  
+  let bestR = 0, bestG = 0, bestB = 0;
+  let maxSaturation = -1;
+
+  // Ищем пиксели с высокой насыщенностью (отсекаем серый фон и блики)
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i], g = data[i+1], b = data[i+2];
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const saturation = max === 0 ? 0 : (max - min) / max; // Чем больше разброс, тем сочнее цвет
+    
+    // Если пиксель яркий и насыщенный (не серый и не черный)
+    if (saturation > maxSaturation && max > 50) {
+      maxSaturation = saturation;
+      bestR = r; bestG = g; bestB = b;
+    }
+  }
+  return [bestR, bestG, bestB];
+}
 
 function nearestNote(r, g, b) {
   let best = null, bestDist = Infinity;
@@ -65,38 +96,44 @@ function playNote(note) {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
-  osc.type = 'sine';
+  // Немного смягчаем звук (треугольная волна звучит приятнее синуса)
+  osc.type = 'triangle'; 
   osc.frequency.value = FREQ[note.note] || 440;
-  gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.8);
+  
+  // Плавное затухание
+  gain.gain.setValueAtTime(0.001, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.2, audioCtx.currentTime + 0.1);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.2);
+  
   osc.connect(gain).connect(audioCtx.destination);
   osc.start();
-  osc.stop(audioCtx.currentTime + 0.8);
+  osc.stop(audioCtx.currentTime + 1.2);
 }
 
 function analyze() {
   if (!video.videoWidth) return;
-  const canvas = document.createElement('canvas');
-  canvas.width = 64; canvas.height = 64;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(video, 0, 0, 64, 64);
-  const data = ctx.getImageData(0, 0, 64, 64).data;
-  let r = 0, g = 0, b = 0, n = 0;
-  for (let i = 0; i < data.length; i += 4) {
-    r += data[i]; g += data[i+1]; b += data[i+2]; n++;
-  }
-  r = Math.round(r/n); g = Math.round(g/n); b = Math.round(b/n);
+  
+  const [r, g, b] = getDominantColor(video);
   colorEl.style.background = `rgb(${r},${g},${b})`;
+  
   const note = nearestNote(r, g, b);
   noteEl.textContent = `${note.name} (${note.note})`;
-  playNote(note);
+  
+  // Добавляем ноту в историю, чтобы не пищала одна и та же
+  if (history[history.length - 1] !== note.note) {
+      history.push(note.note);
+      if (history.length > 5) history.shift();
+      historyEl.textContent = "Мелодия: " + history.join(' - ');
+      playNote(note);
+  }
 }
 
 document.getElementById('start').onclick = async () => {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
     video.srcObject = stream;
-    interval = setInterval(analyze, 1500); // каждые 1.5 сек — новая нота
+    history = []; // сбрасываем историю
+    interval = setInterval(analyze, 1500); // каждые 1.5 сек
   } catch (e) {
     alert('Камера недоступна: ' + e.message);
   }
@@ -106,6 +143,7 @@ document.getElementById('stop').onclick = () => {
   if (interval) clearInterval(interval);
   if (stream) stream.getTracks().forEach(t => t.stop());
   noteEl.textContent = '—';
+  historyEl.textContent = '';
 };
 </script>
 </body>
