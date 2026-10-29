@@ -9,17 +9,16 @@
   .video-container { position: relative; display: inline-block; max-width:400px; width: 100%; overflow: hidden; border-radius:12px; margin-top:12px; border: 2px solid #333; }
   video { width:100%; display: block; }
   
-  /* Контейнер для точек сканера */
   #scanner-line { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
-  .scan-dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 5px rgba(255,255,255,0.8); transition: opacity 0.2s; }
+  .scan-dot { position: absolute; width: 6px; height: 6px; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 4px rgba(255,255,255,0.8); }
   
   #note { font-size:1.5em; margin:12px; height: 30px; font-weight: bold; color: #4a9; }
   #color { width:30px; height:30px; border-radius:50%; display:inline-block; border:2px solid #fff; vertical-align: middle; margin-right: 10px;}
   button { padding:12px 24px; font-size:1em; border-radius:8px; border:none; background:#4a9; color:#000; margin:8px; font-weight: bold; cursor:pointer;}
   button:disabled { background: #555; color: #888; cursor: not-allowed; }
   #unlock { background: #d35400; color: white; display: none; margin-top: 10px; width: 80%; max-width: 300px; }
-  #history { font-size: 0.9em; color: #888; margin-top: 10px; word-wrap: break-word; padding: 0 15px; height: 40px;}
-  #status { font-size: 1.2em; color: #e67e22; font-weight: bold; height: 25px; margin-top: 10px;}
+  #history { font-size: 0.85em; color: #888; margin-top: 10px; word-wrap: break-word; padding: 0 15px; height: 50px; overflow-y: auto;}
+  #status { font-size: 1.1em; color: #e67e22; font-weight: bold; height: 25px; margin-top: 10px;}
 </style>
 </head>
 <body>
@@ -41,7 +40,6 @@
 <div id="history"></div>
 
 <script>
-// Таблица Скрябина
 const SKRYABIN = [
   { note: 'C',  name: 'до',        rgb: [255, 0, 0] },
   { note: 'G',  name: 'соль',      rgb: [255, 128, 80] },
@@ -63,6 +61,11 @@ const BASE_FREQ = {
   'Db': 277.18, 'Eb': 311.13, 'F#': 369.99, 'Ab': 415.30, 'Bb': 466.16
 };
 
+const SCALES = {
+  minor: [0, 2, 3, 5, 7, 8, 10],
+  major: [0, 2, 4, 5, 7, 9, 11]
+};
+
 const video = document.getElementById('cam');
 const scannerLine = document.getElementById('scanner-line');
 const noteEl = document.getElementById('note');
@@ -76,7 +79,6 @@ let stream = null, audioCtx = null;
 let collectedNotes = [];
 let isScanning = false;
 
-// Типы шагов для сканера (как вы просили: нота -> диез -> мажор)
 const STEP_TYPES = ['NOTE', 'SHARP', 'OCTAVE', 'SHARP_OCTAVE'];
 let stepIndex = 0;
 
@@ -85,7 +87,7 @@ unlockBtn.onclick = () => {
   audioCtx.resume().then(() => {
     unlockBtn.style.display = 'none';
     scanBtn.disabled = false;
-    playTone(440, 1); 
+    playTone(440, 1, 0.1, 'triangle'); 
   });
 };
 
@@ -116,123 +118,108 @@ function playTone(freq, duration = 0.5, vol = 0.2, type = 'triangle') {
   osc.stop(now + duration);
 }
 
-// 1. ФАЗА СКАНИРОВАНИЯ
 function startScan() {
   if (isScanning || !video.videoWidth) return;
   isScanning = true;
   collectedNotes = [];
   stepIndex = 0;
   scanBtn.disabled = true;
-  statusEl.textContent = "Сканирование картины...";
+  statusEl.textContent = "Считывание цветов...";
   historyEl.textContent = "";
-  scannerLine.innerHTML = ""; // Очищаем старые точки
+  scannerLine.innerHTML = "";
 
-  const totalSteps = 24; // Количество точек сканирования
+  // УВЕЛИЧИЛИ КОЛИЧЕСТВО ТОЧЕК
+  const totalSteps = 64; 
   let currentStep = 0;
 
+  // Ускорили интервал, чтобы 64 точки проходили не слишком долго
   const scanInterval = setInterval(() => {
     if (currentStep >= totalSteps) {
       clearInterval(scanInterval);
       isScanning = false;
-      generateMelody(); // Переходим к генерации
+      generateMelody();
       return;
     }
 
-    // Координаты точки (линия идет слева направо)
     const xPercent = (currentStep / (totalSteps - 1)) * 100;
-    const yPercent = 50 + Math.sin(currentStep * 0.8) * 20; // Легкая волна по вертикали
+    const yPercent = 50 + Math.sin(currentStep * 0.5) * 25; // Волна стала чуть шире
 
-    // Рисуем точку на экране
     const dot = document.createElement('div');
     dot.className = 'scan-dot';
     dot.style.left = xPercent + '%';
     dot.style.top = yPercent + '%';
     scannerLine.appendChild(dot);
 
-    // Анализ цвета в этой точке
     const canvas = document.createElement('canvas');
     canvas.width = 64; canvas.height = 64;
     const ctx = canvas.getContext('2d');
-    ctx.translate(64, 0); ctx.scale(-1, 1); // Зеркалим
+    ctx.translate(64, 0); ctx.scale(-1, 1);
     ctx.drawImage(video, 0, 0, 64, 64);
     const data = ctx.getImageData(0, 0, 64, 64).data;
 
-    const px = Math.floor((xPercent / 100) * 63);
-    const py = Math.floor((yPercent / 100) * 63);
+    // Уменьшили разброс пикселя, так как точек стало больше (меньше хаоса)
+    const offset = Math.floor(Math.random() * 2) - 1; 
+    const px = Math.max(0, Math.min(63, Math.floor((xPercent / 100) * 63) + offset));
+    const py = Math.max(0, Math.min(63, Math.floor((yPercent / 100) * 63) + offset));
     const i = (py * 64 + px) * 4;
     const r = data[i], g = data[i+1], b = data[i+2];
 
-    // Цвет точки
     dot.style.backgroundColor = `rgb(${r},${g},${b})`;
     colorEl.style.background = `rgb(${r},${g},${b})`;
 
-    // Определяем базовую ноту
     const baseNote = nearestNote(r, g, b);
-    
-    // Применяем правило: нота -> диез -> мажор (октава)
     let stepType = STEP_TYPES[stepIndex % STEP_TYPES.length];
     let finalFreq = BASE_FREQ[baseNote.note] || 440;
-    let displayName = baseNote.name;
+    
+    const brightness = (r + g + b) / 3;
+    if (brightness < 100) finalFreq *= 0.8; 
 
-    if (stepType === 'SHARP' || stepType === 'SHARP_OCTAVE') {
-      finalFreq *= 1.05946; // Повышаем на полтона (диез)
-      displayName = baseNote.name + "#";
-    }
-    if (stepType === 'OCTAVE' || stepType === 'SHARP_OCTAVE') {
-      finalFreq *= 2; // Повышаем на октаву (мажорный оттенок)
-      displayName += " (выс.)";
-    }
+    if (stepType === 'SHARP' || stepType === 'SHARP_OCTAVE') finalFreq *= 1.05946;
+    if (stepType === 'OCTAVE' || stepType === 'SHARP_OCTAVE') finalFreq *= 2;
 
-    noteEl.textContent = displayName;
-    historyEl.textContent += baseNote.note + (stepType.includes('SHARP') ? '#' : '') + " ";
-
-    // Играем короткий звук при сканировании
-    playTone(finalFreq, 0.3, 0.1, 'sine');
-
-    // Сохраняем ноту в массив для ИИ
-    collectedNotes.push({
-      base: baseNote.note,
-      freq: finalFreq,
-      isSharp: stepType.includes('SHARP'),
-      isOctave: stepType.includes('OCTAVE')
-    });
+    playTone(finalFreq, 0.15, 0.08, 'sine'); // Звук сканера стал короче и тише
+    collectedNotes.push({ base: baseNote.note, freq: finalFreq, brightness: brightness });
 
     currentStep++;
     stepIndex++;
-
-  }, 150); // Скорость сканирования
+  }, 60); // Быстрее (60 мс вместо 120)
 }
 
-// 2. ФАЗА "ИИ" (АНАЛИЗ И ГЕНЕРАЦИЯ)
 function generateMelody() {
-  statusEl.textContent = "Анализ и создание мелодии...";
+  statusEl.textContent = "Импровизация...";
   noteEl.textContent = "Думаю...";
   
   setTimeout(() => {
     if (collectedNotes.length === 0) return;
 
-    // Ищем самую частую ноту (это будет тональность)
     const counts = {};
+    let totalBrightness = 0;
     collectedNotes.forEach(n => {
       counts[n.base] = (counts[n.base] || 0) + 1;
+      totalBrightness += n.brightness;
     });
+    
     let tonic = collectedNotes[0].base;
     let maxCount = 0;
     for (const [note, count] of Object.entries(counts)) {
       if (count > maxCount) { maxCount = count; tonic = note; }
     }
     
-    statusEl.textContent = `Тональность: ${tonic}. Играем!`;
+    const avgBrightness = totalBrightness / collectedNotes.length;
+    const scaleType = avgBrightness > 127 ? 'major' : 'minor';
+    const scale = SCALES[scaleType];
+    
+    statusEl.textContent = `Тональность: ${tonic} (${scaleType === 'major' ? 'светлая' : 'мрачная'})`;
 
-    // "Умная" генерация мелодии на основе собранных данных
-    // Мы берем последовательность, но добавляем ритм (паузы) и аккорды (бас)
     let playHead = 0;
-    const tempo = 400; // мс между нотами
+    let baseDelay = 200; // Темп стал быстрее, так как нот больше
+    let chordInterval = Math.floor(Math.random() * 4) + 2; 
 
     function playNextNote() {
+      // Чтобы 64 ноты не играли слишком долго, играем не все подряд, 
+      // а "прореживаем" (например, каждую вторую)
       if (playHead >= collectedNotes.length) {
-        // Конец мелодии
-        statusEl.textContent = "Готово! Можете сканировать снова.";
+        statusEl.textContent = "Готово!";
         scanBtn.disabled = false;
         noteEl.textContent = "—";
         return;
@@ -240,31 +227,28 @@ function generateMelody() {
 
       const current = collectedNotes[playHead];
       
-      // Играем основную ноту
-      playTone(current.freq, 0.6, 0.2, 'triangle');
+      let duration = 0.3 + Math.random() * 0.3; 
+      let vol = 0.15 + (current.brightness / 255) * 0.15;
       
-      // Каждую 4-ю ноту добавляем "бас" (аккорд) для красоты
-      if (playHead % 4 === 0) {
-        // Берем ноту из собранных, но на две октавы ниже
-        let bassFreq = current.freq / 4; 
-        playTone(bassFreq, 1.0, 0.15, 'sine');
+      playTone(current.freq, duration, vol, 'triangle');
+      
+      if (playHead % chordInterval === 0) {
+        let stepShift = scale[Math.floor(Math.random() * scale.length)];
+        let harmonyFreq = current.freq * Math.pow(2, stepShift / 12);
+        if (Math.random() > 0.5) harmonyFreq /= 2;
+        
+        playTone(harmonyFreq, duration * 1.5, 0.1, 'sine');
       }
 
-      noteEl.textContent = current.base + (current.isSharp ? '#' : '');
+      noteEl.textContent = current.base;
+      playHead += 2; // Играем каждую вторую ноту для динамики
       
-      playHead++;
-      
-      // Разный ритм: иногда быстрее, иногда медленнее (как в настоящей музыке)
-      let nextDelay = tempo;
-      if (current.isOctave) nextDelay *= 1.5; // Высокие ноты держатся дольше
-      if (current.isSharp) nextDelay *= 0.7;  // Диезы играют быстрее
-      
+      let nextDelay = baseDelay + (Math.random() * 80 - 40); 
       setTimeout(playNextNote, nextDelay);
     }
 
     playNextNote();
-
-  }, 1000); // Пауза "на подумать"
+  }, 1000);
 }
 
 document.getElementById('start').onclick = async () => {
@@ -272,7 +256,7 @@ document.getElementById('start').onclick = async () => {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
     video.srcObject = stream;
     unlockBtn.style.display = 'block';
-    statusEl.textContent = "Нажми на звук, затем на скан.";
+    statusEl.textContent = "Включи звук и нажми 'Сканировать'";
   } catch (e) {
     alert('Камера недоступна: ' + e.message);
   }
