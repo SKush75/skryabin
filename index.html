@@ -61,10 +61,8 @@ const BASE_FREQ = {
   'Db': 277.18, 'Eb': 311.13, 'F#': 369.99, 'Ab': 415.30, 'Bb': 466.16
 };
 
-const SCALES = {
-  minor: [0, 2, 3, 5, 7, 8, 10],
-  major: [0, 2, 4, 5, 7, 9, 11]
-};
+// Хроматическая гамма для плавного перехода
+const CHROMATIC = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
 
 const video = document.getElementById('cam');
 const scannerLine = document.getElementById('scanner-line');
@@ -78,9 +76,6 @@ const scanBtn = document.getElementById('scan');
 let stream = null, audioCtx = null;
 let collectedNotes = [];
 let isScanning = false;
-
-const STEP_TYPES = ['NOTE', 'SHARP', 'OCTAVE', 'SHARP_OCTAVE'];
-let stepIndex = 0;
 
 unlockBtn.onclick = () => {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -110,7 +105,8 @@ function playTone(freq, duration = 0.5, vol = 0.2, type = 'triangle') {
   
   const now = audioCtx.currentTime;
   gain.gain.setValueAtTime(0.001, now);
-  gain.gain.exponentialRampToValueAtTime(vol, now + 0.02);
+  // Делаем атаку (нарастание) и затухание плавнее, чтобы звучало мягко
+  gain.gain.linearRampToValueAtTime(vol, now + 0.05);
   gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
   
   osc.connect(gain).connect(audioCtx.destination);
@@ -122,13 +118,11 @@ function startScan() {
   if (isScanning || !video.videoWidth) return;
   isScanning = true;
   collectedNotes = [];
-  stepIndex = 0;
   scanBtn.disabled = true;
   statusEl.textContent = "Считывание...";
   historyEl.textContent = "";
   scannerLine.innerHTML = "";
 
-  // Сетка 10 на 10 = 100 точек
   const gridX = 10; 
   const gridY = 10;
   const totalSteps = gridX * gridY; 
@@ -142,11 +136,8 @@ function startScan() {
       return;
     }
 
-    // Вычисляем позицию по сетке
     const col = currentStep % gridX;
     const row = Math.floor(currentStep / gridX);
-    
-    // Идут слева направо, строка за строкой
     const xPercent = (col / (gridX - 1)) * 100;
     const yPercent = (row / (gridY - 1)) * 100;
 
@@ -169,33 +160,24 @@ function startScan() {
     const r = data[i], g = data[i+1], b = data[i+2];
 
     dot.style.backgroundColor = `rgb(${r},${g},${b})`;
-    colorEl.style.background = `rgb(${r},${g},${b})`;
-
-    const baseNote = nearestNote(r, g, b);
-    let stepType = STEP_TYPES[stepIndex % STEP_TYPES.length];
-    let finalFreq = BASE_FREQ[baseNote.note] || 440;
     
+    const baseNote = nearestNote(r, g, b);
     const brightness = (r + g + b) / 3;
-    if (brightness < 100) finalFreq *= 0.8; 
-
-    if (stepType === 'SHARP' || stepType === 'SHARP_OCTAVE') finalFreq *= 1.05946;
-    if (stepType === 'OCTAVE' || stepType === 'SHARP_OCTAVE') finalFreq *= 2;
-
-    playTone(finalFreq, 0.1, 0.05, 'sine');
-    collectedNotes.push({ base: baseNote.note, freq: finalFreq, brightness: brightness });
+    
+    collectedNotes.push({ base: baseNote.note, brightness: brightness });
 
     currentStep++;
-    stepIndex++;
-  }, 30); // Очень быстро (30 мс на точку, весь скан за 3 секунды)
+  }, 30); 
 }
 
 function generateMelody() {
-  statusEl.textContent = "Играем...";
+  statusEl.textContent = "Гармонизация...";
   noteEl.textContent = "Думаю...";
   
   setTimeout(() => {
     if (collectedNotes.length === 0) return;
 
+    // 1. Находим тональность и настроение (светлое/мрачное)
     const counts = {};
     let totalBrightness = 0;
     collectedNotes.forEach(n => {
@@ -211,42 +193,68 @@ function generateMelody() {
     
     const avgBrightness = totalBrightness / collectedNotes.length;
     const scaleType = avgBrightness > 127 ? 'major' : 'minor';
-    const scale = SCALES[scaleType];
-    
-    statusEl.textContent = `Тональность: ${tonic} (${scaleType === 'major' ? 'светлая' : 'мрачная'})`;
+    statusEl.textContent = `Тональность: ${tonic} (${scaleType})`;
+
+    // 2. Сортируем ноты по высоте (снизу вверх), чтобы мелодия не прыгала хаотично
+    const tonicIndex = CHROMATIC.indexOf(tonic);
+    let sortedSequence = collectedNotes.map(n => {
+      let noteIdx = CHROMATIC.indexOf(n.base);
+      // Если нота ниже тоники, поднимаем ее на октаву вверх для плавности
+      if (noteIdx < tonicIndex) noteIdx += 12;
+      return { ...n, noteIdx: noteIdx };
+    }).sort((a, b) => a.noteIdx - b.noteIdx);
+
+    // 3. Создаем плавную волну (арпеджио)
+    let finalSequence = [];
+    // Идем вверх по гамме
+    for (let i = 0; i < sortedSequence.length; i++) {
+      finalSequence.push(sortedSequence[i]);
+    }
+    // Идем обратно вниз
+    for (let i = sortedSequence.length - 2; i >= 0; i--) {
+      finalSequence.push(sortedSequence[i]);
+    }
 
     let playHead = 0;
-    // Очень быстрый темп воспроизведения
-    let baseDelay = 100; 
-    let chordInterval = Math.floor(Math.random() * 3) + 2; 
+    const tempo = 200; // Темп
 
     function playNextNote() {
-      if (playHead >= collectedNotes.length) {
+      if (playHead >= finalSequence.length) {
         statusEl.textContent = "Готово!";
         scanBtn.disabled = false;
         noteEl.textContent = "—";
+        historyEl.textContent = "Мелодия завершена.";
         return;
       }
 
-      const current = collectedNotes[playHead];
+      const current = finalSequence[playHead];
+      const noteName = CHROMATIC[current.noteIdx % 12];
       
-      let duration = 0.2 + Math.random() * 0.2; 
-      let vol = 0.1 + (current.brightness / 255) * 0.15;
+      let freq = BASE_FREQ[noteName] || 440;
+      // Если нота ушла выше 12 (вторая октава), удваиваем частоту
+      if (current.noteIdx >= 12) freq *= 2;
+
+      // Ритм: сильные доли (каждая 4-я нота) звучат громче и дольше
+      let isStrong = playHead % 4 === 0;
+      let duration = isStrong ? 0.6 : 0.3;
+      let vol = isStrong ? 0.2 : 0.1;
+
+      playTone(freq, duration, vol, 'triangle');
       
-      playTone(current.freq, duration, vol, 'triangle');
-      
-      if (playHead % chordInterval === 0) {
-        let stepShift = scale[Math.floor(Math.random() * scale.length)];
-        let harmonyFreq = current.freq * Math.pow(2, stepShift / 12);
-        if (Math.random() > 0.5) harmonyFreq /= 2;
-        
-        playTone(harmonyFreq, duration * 1.5, 0.08, 'sine');
+      // Басовая линия (играет каждые 4 ноты)
+      if (isStrong) {
+        let bassFreq = freq / 4; // На две октавы ниже
+        playTone(bassFreq, duration * 1.5, 0.15, 'sine');
       }
 
-      noteEl.textContent = current.base;
-      playHead += 1; // Играем ВСЕ 100 нот подряд
+      noteEl.textContent = noteName;
+      // Записываем в историю
+      historyEl.textContent = finalSequence.slice(Math.max(0, playHead - 5), playHead + 1).map(n => CHROMATIC[n.noteIdx % 12]).join(' - ');
+
+      playHead++;
       
-      let nextDelay = baseDelay + (Math.random() * 50 - 25); 
+      // Небольшая рандомизация ритма
+      let nextDelay = tempo + (Math.random() * 40 - 20); 
       setTimeout(playNextNote, nextDelay);
     }
 
