@@ -3,20 +3,28 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Скрябин: картина → музыка</title>
+<title>Скрябин: Спираль картины</title>
 <style>
   body { margin:0; background:#111; color:#eee; font-family:sans-serif; text-align:center; }
   video { width:100%; max-width:400px; border-radius:12px; margin-top:12px; border: 2px solid #333; }
+  /* Оверлей, чтобы рисовать точку спирали поверх видео */
+  .video-container { position: relative; display: inline-block; max-width:400px; width: 100%; }
+  #spiral-dot { position: absolute; width: 10px; height: 10px; background: white; border-radius: 50%; box-shadow: 0 0 10px white; display: none; pointer-events: none; transform: translate(-50%, -50%); }
+  
   #note { font-size:1.5em; margin:12px; height: 30px; font-weight: bold; color: #4a9; }
-  #color { width:60px; height:60px; border-radius:50%; display:inline-block; border:2px solid #fff; vertical-align: middle; margin-right: 10px;}
+  #color { width:40px; height:40px; border-radius:50%; display:inline-block; border:2px solid #fff; vertical-align: middle; margin-right: 10px;}
   button { padding:12px 24px; font-size:1em; border-radius:8px; border:none; background:#4a9; color:#000; margin:8px; font-weight: bold;}
   #unlock { background: #d35400; color: white; display: none; margin-top: 10px; width: 80%; max-width: 300px; }
-  #history { font-size: 0.9em; color: #888; margin-top: 10px; }
+  #history { font-size: 0.9em; color: #888; margin-top: 10px; word-wrap: break-word; padding: 0 15px;}
 </style>
 </head>
 <body>
-<h2>Наведи камеру на картину</h2>
-<video id="cam" autoplay playsinline></video>
+<h2>Спираль картины</h2>
+<div class="video-container">
+    <video id="cam" autoplay playsinline></video>
+    <div id="spiral-dot"></div>
+</div>
+
 <button id="unlock">1. Нажми для звука</button>
 <div style="margin-top: 15px;">
   <div id="color"></div>
@@ -54,46 +62,22 @@ const noteEl = document.getElementById('note');
 const colorEl = document.getElementById('color');
 const historyEl = document.getElementById('history');
 const unlockBtn = document.getElementById('unlock');
+const dot = document.getElementById('spiral-dot');
 
-let stream = null, interval = null, audioCtx = null;
-let history = [];
+let stream = null, audioCtx = null, isPlaying = false;
+let spiralStep = 0;
+const MAX_STEPS = 40; // Количество точек на спирали
 
-// Инициализация звука по нажатию кнопки
 unlockBtn.onclick = () => {
-  if (!audioCtx) {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   audioCtx.resume().then(() => {
     unlockBtn.style.display = 'none';
-    // Короткий тестовый писк, чтобы понять, что звук включился
-    playChord([{note: 'C'}], 0.1); 
+    // Короткий тестовый звук
+    playTone(440, 1.5); 
   });
 };
 
-function getDominantColor(videoEl) {
-  const canvas = document.createElement('canvas');
-  canvas.width = 64; canvas.height = 64;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(videoEl, 0, 0, 64, 64);
-  const data = ctx.getImageData(0, 0, 64, 64).data;
-  
-  let bestR = 0, bestG = 0, bestB = 0;
-  let maxSaturation = -1;
-
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i], g = data[i+1], b = data[i+2];
-    const max = Math.max(r, g, b);
-    const min = Math.min(r, g, b);
-    const saturation = max === 0 ? 0 : (max - min) / max;
-    
-    if (saturation > maxSaturation && max > 50) {
-      maxSaturation = saturation;
-      bestR = r; bestG = g; bestB = b;
-    }
-  }
-  return [bestR, bestG, bestB];
-}
-
+// Функция поиска ноты по RGB
 function nearestNote(r, g, b) {
   let best = null, bestDist = Infinity;
   for (const s of SKRYABIN) {
@@ -104,54 +88,77 @@ function nearestNote(r, g, b) {
   return best;
 }
 
-// Играем сразу две ноты (аккорд) для красоты
-function playChord(notesArray, duration = 1.5) {
+function playTone(freq, duration = 0.6) {
   if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'triangle'; 
+  osc.frequency.value = freq;
   
-  notesArray.forEach((note, index) => {
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    
-    osc.type = 'triangle'; 
-    // Вторую ноту берем на октаву выше для объема
-    let freq = FREQ[note.note] || 440;
-    if (index > 0) freq *= 2; 
-    
-    osc.frequency.value = freq;
-    
-    // Плавное нарастание и затухание
-    const now = audioCtx.currentTime;
-    gain.gain.setValueAtTime(0.001, now);
-    gain.gain.exponentialRampToValueAtTime(0.15, now + 0.2);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-    
-    osc.connect(gain).connect(audioCtx.destination);
-    osc.start(now);
-    osc.stop(now + duration);
-  });
+  const now = audioCtx.currentTime;
+  gain.gain.setValueAtTime(0.001, now);
+  gain.gain.exponentialRampToValueAtTime(0.2, now + 0.05);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+  
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(now);
+  osc.stop(now + duration);
 }
 
-function analyze() {
-  if (!video.videoWidth) return;
+// Главная функция сканирования по спирали
+function scanSpiral() {
+  if (!isPlaying || !video.videoWidth) return;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 64; canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  // Зеркалим картинку, так как камера телефона обычно показывает зеркально
+  ctx.translate(64, 0); ctx.scale(-1, 1); 
+  ctx.drawImage(video, 0, 0, 64, 64);
+  const data = ctx.getImageData(0, 0, 64, 64).data;
+
+  // Вычисляем координаты точки по спирали Архимеда
+  // Угол растет, радиус тоже (от центра к краям)
+  const angle = spiralStep * 0.8; // Шаг угла
+  const radius = (spiralStep / MAX_STEPS) * 30; // Радиус от 0 до 30 (половина кадра)
   
-  const [r, g, b] = getDominantColor(video);
+  const x = Math.floor(32 + radius * Math.cos(angle));
+  const y = Math.floor(32 + radius * Math.sin(angle));
+
+  // Визуализация: двигаем белую точку по экрану телефона
+  const rect = video.getBoundingClientRect();
+  dot.style.display = 'block';
+  dot.style.left = (x / 64) * rect.width + 'px';
+  dot.style.top = (y / 64) * rect.height + 'px';
+
+  // Получаем цвет пикселя
+  const i = (y * 64 + x) * 4;
+  const r = data[i], g = data[i+1], b = data[i+2];
+
   colorEl.style.background = `rgb(${r},${g},${b})`;
+  const note = nearestNote(r, g, b);
+  noteEl.textContent = `${note.name} (${note.note})`;
   
-  const mainNote = nearestNote(r, g, b);
-  noteEl.textContent = `${mainNote.name} (${mainNote.note})`;
-  
-  if (history[history.length - 1] !== mainNote.note) {
-      history.push(mainNote.note);
-      if (history.length > 4) history.shift();
-      historyEl.textContent = "Звучит: " + history.join(' • ');
-      
-      // Играем аккорд: основная нота + предыдущая нота из истории (если есть)
-      let chord = [mainNote];
-      if (history.length > 1) {
-         const prevNote = SKRYABIN.find(n => n.note === history[history.length - 2]);
-         if (prevNote) chord.push(prevNote);
-      }
-      playChord(chord);
+  // Записываем в историю
+  historyEl.textContent += note.note + " ";
+  if (historyEl.textContent.length > 100) {
+    historyEl.textContent = "... " + historyEl.textContent.slice(-90);
+  }
+
+  // Играем звук
+  playTone(FREQ[note.note] || 440, 0.4);
+
+  // Шагаем дальше по спирали
+  spiralStep++;
+  if (spiralStep > MAX_STEPS) {
+    // Когда спираль закончилась, начинаем сначала
+    spiralStep = 0;
+    historyEl.textContent += " | ";
+  }
+
+  // Задержка между нотами (скорость "проигрывания" картины)
+  if (isPlaying) {
+    setTimeout(scanSpiral, 150); // 150 мс между нотами (можно менять)
   }
 }
 
@@ -159,22 +166,25 @@ document.getElementById('start').onclick = async () => {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
     video.srcObject = stream;
-    history = [];
-    unlockBtn.style.display = 'block'; // Показываем кнопку разблокировки звука
+    unlockBtn.style.display = 'block';
     
-    // Запускаем анализ только если звук уже разблокирован
-    if (interval) clearInterval(interval);
-    interval = setInterval(analyze, 1500);
+    if (!isPlaying) {
+      isPlaying = true;
+      spiralStep = 0;
+      historyEl.textContent = "";
+      // Запускаем сканирование с небольшой задержкой, чтобы камера успела сфокусироваться
+      setTimeout(scanSpiral, 1000); 
+    }
   } catch (e) {
     alert('Камера недоступна: ' + e.message);
   }
 };
 
 document.getElementById('stop').onclick = () => {
-  if (interval) clearInterval(interval);
+  isPlaying = false;
   if (stream) stream.getTracks().forEach(t => t.stop());
   noteEl.textContent = '—';
-  historyEl.textContent = '';
+  dot.style.display = 'none';
   unlockBtn.style.display = 'none';
 };
 </script>
