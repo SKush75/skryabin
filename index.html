@@ -61,8 +61,11 @@ const BASE_FREQ = {
   'Db': 277.18, 'Eb': 311.13, 'F#': 369.99, 'Ab': 415.30, 'Bb': 466.16
 };
 
-// Хроматическая гамма для плавного перехода
 const CHROMATIC = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
+const SCALES = {
+  minor: [0, 2, 3, 5, 7, 8, 10], // Минорная гамма
+  major: [0, 2, 4, 5, 7, 9, 11]  // Мажорная гамма
+};
 
 const video = document.getElementById('cam');
 const scannerLine = document.getElementById('scanner-line');
@@ -82,7 +85,7 @@ unlockBtn.onclick = () => {
   audioCtx.resume().then(() => {
     unlockBtn.style.display = 'none';
     scanBtn.disabled = false;
-    playTone(440, 1, 0.1, 'triangle'); 
+    playTone(440, 0.5, 0.1, 'sine'); 
   });
 };
 
@@ -96,7 +99,8 @@ function nearestNote(r, g, b) {
   return best;
 }
 
-function playTone(freq, duration = 0.5, vol = 0.2, type = 'triangle') {
+// Универсальная функция звука (для мелодии и для баса)
+function playTone(freq, duration = 0.5, vol = 0.2, type = 'sine') {
   if (!audioCtx) return;
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
@@ -105,9 +109,15 @@ function playTone(freq, duration = 0.5, vol = 0.2, type = 'triangle') {
   
   const now = audioCtx.currentTime;
   gain.gain.setValueAtTime(0.001, now);
-  // Делаем атаку (нарастание) и затухание плавнее, чтобы звучало мягко
-  gain.gain.linearRampToValueAtTime(vol, now + 0.05);
-  gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+  // Если это бас, делаем атаку резче (как удар барабана)
+  if (type === 'sine' && freq < 150) {
+    gain.gain.linearRampToValueAtTime(vol, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+  } else {
+    // Для мелодии — плавнее
+    gain.gain.linearRampToValueAtTime(vol, now + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+  }
   
   osc.connect(gain).connect(audioCtx.destination);
   osc.start(now);
@@ -119,7 +129,7 @@ function startScan() {
   isScanning = true;
   collectedNotes = [];
   scanBtn.disabled = true;
-  statusEl.textContent = "Считывание...";
+  statusEl.textContent = "Считывание цвета...";
   historyEl.textContent = "";
   scannerLine.innerHTML = "";
 
@@ -132,7 +142,7 @@ function startScan() {
     if (currentStep >= totalSteps) {
       clearInterval(scanInterval);
       isScanning = false;
-      generateMelody();
+      generateMusic();
       return;
     }
 
@@ -162,7 +172,7 @@ function startScan() {
     dot.style.backgroundColor = `rgb(${r},${g},${b})`;
     
     const baseNote = nearestNote(r, g, b);
-    const brightness = (r + g + b) / 3;
+    const brightness = (r + g + b) / 3; // 0 (черный) - 255 (белый)
     
     collectedNotes.push({ base: baseNote.note, brightness: brightness });
 
@@ -170,14 +180,14 @@ function startScan() {
   }, 30); 
 }
 
-function generateMelody() {
-  statusEl.textContent = "Гармонизация...";
+function generateMusic() {
+  statusEl.textContent = "Создание бита...";
   noteEl.textContent = "Думаю...";
   
   setTimeout(() => {
     if (collectedNotes.length === 0) return;
 
-    // 1. Находим тональность и настроение (светлое/мрачное)
+    // 1. Определяем тональность по самому частому цвету
     const counts = {};
     let totalBrightness = 0;
     collectedNotes.forEach(n => {
@@ -191,74 +201,98 @@ function generateMelody() {
       if (count > maxCount) { maxCount = count; tonic = note; }
     }
     
+    const tonicIdx = CHROMATIC.indexOf(tonic);
     const avgBrightness = totalBrightness / collectedNotes.length;
     const scaleType = avgBrightness > 127 ? 'major' : 'minor';
-    statusEl.textContent = `Тональность: ${tonic} (${scaleType})`;
+    const scale = SCALES[scaleType];
+    
+    statusEl.textContent = `Тональность: ${tonic} (${scaleType === 'major' ? 'светлая' : 'мрачная'})`;
 
-    // 2. Сортируем ноты по высоте (снизу вверх), чтобы мелодия не прыгала хаотично
-    const tonicIndex = CHROMATIC.indexOf(tonic);
-    let sortedSequence = collectedNotes.map(n => {
+    // 2. Разделяем ноты на БАС (темные) и МЕЛОДИЮ (светлые)
+    let bassNotes = collectedNotes.filter(n => n.brightness < 80); 
+    let melodyNotes = collectedNotes.filter(n => n.brightness >= 80);
+
+    // Если темных нет, берем самые темные из имеющихся для баса
+    if (bassNotes.length < 4) {
+        bassNotes = [...collectedNotes].sort((a,b) => a.brightness - b.brightness).slice(0, 8);
+    }
+    // Если светлых нет, берем остальные для мелодии
+    if (melodyNotes.length < 4) {
+        melodyNotes = [...collectedNotes].sort((a,b) => b.brightness - a.brightness).slice(0, 16);
+    }
+
+    // Готовим мелодию (транспонируем в тональность)
+    const melodySequence = melodyNotes.map(n => {
       let noteIdx = CHROMATIC.indexOf(n.base);
-      // Если нота ниже тоники, поднимаем ее на октаву вверх для плавности
-      if (noteIdx < tonicIndex) noteIdx += 12;
-      return { ...n, noteIdx: noteIdx };
-    }).sort((a, b) => a.noteIdx - b.noteIdx);
+      if (noteIdx < tonicIdx) noteIdx += 12; // Подтягиваем к тональности
+      return noteIdx;
+    });
 
-    // 3. Создаем плавную волну (арпеджио)
-    let finalSequence = [];
-    // Идем вверх по гамме
-    for (let i = 0; i < sortedSequence.length; i++) {
-      finalSequence.push(sortedSequence[i]);
-    }
-    // Идем обратно вниз
-    for (let i = sortedSequence.length - 2; i >= 0; i--) {
-      finalSequence.push(sortedSequence[i]);
-    }
+    // 3. ИГРАЕМ МУЗЫКУ
+    let step = 0;
+    const bpm = 120; // Скорость (ударов в минуту)
+    const stepTime = 60000 / bpm / 2; // Одна восьмая нота (в мс)
 
-    let playHead = 0;
-    const tempo = 200; // Темп
-
-    function playNextNote() {
-      if (playHead >= finalSequence.length) {
+    function playNextStep() {
+      // Ограничиваем длительность композиции (например, 32 шага)
+      if (step >= 32) {
         statusEl.textContent = "Готово!";
         scanBtn.disabled = false;
         noteEl.textContent = "—";
-        historyEl.textContent = "Мелодия завершена.";
         return;
       }
 
-      const current = finalSequence[playHead];
-      const noteName = CHROMATIC[current.noteIdx % 12];
-      
-      let freq = BASE_FREQ[noteName] || 440;
-      // Если нота ушла выше 12 (вторая октава), удваиваем частоту
-      if (current.noteIdx >= 12) freq *= 2;
-
-      // Ритм: сильные доли (каждая 4-я нота) звучат громче и дольше
-      let isStrong = playHead % 4 === 0;
-      let duration = isStrong ? 0.6 : 0.3;
-      let vol = isStrong ? 0.2 : 0.1;
-
-      playTone(freq, duration, vol, 'triangle');
-      
-      // Басовая линия (играет каждые 4 ноты)
-      if (isStrong) {
-        let bassFreq = freq / 4; // На две октавы ниже
-        playTone(bassFreq, duration * 1.5, 0.15, 'sine');
+      // --- БАС (отбивает ритм на каждой сильной доле) ---
+      if (step % 4 === 0) {
+        // Берем случайную темную ноту для баса
+        const bassColor = bassNotes[Math.floor(Math.random() * bassNotes.length)];
+        let bassNoteIdx = CHROMATIC.indexOf(bassColor.base);
+        // Опускаем бас на 2 октавы вниз
+        let bassFreq = (BASE_FREQ[CHROMATIC[bassNoteIdx % 12]] || 440) / 4; 
+        
+        // Чем темнее цвет, тем громче удар
+        let bassVol = 0.15 + ((255 - bassColor.brightness) / 255) * 0.2;
+        playTone(bassFreq, 0.4, bassVol, 'sine');
       }
 
-      noteEl.textContent = noteName;
-      // Записываем в историю
-      historyEl.textContent = finalSequence.slice(Math.max(0, playHead - 5), playHead + 1).map(n => CHROMATIC[n.noteIdx % 12]).join(' - ');
+      // --- МЕЛОДИЯ (играет на каждой второй доле) ---
+      if (step % 2 === 0 && melodySequence.length > 0) {
+        // Берем ноту из мелодии
+        let noteIdx = melodySequence[(step / 2) % melodySequence.length];
+        
+        // Привязываем к гамме (если нота не в гамме, берем ближайшую из гаммы)
+        let octave = Math.floor(noteIdx / 12);
+        let noteInOctave = noteIdx % 12;
+        
+        // Ищем ближайшую ноту в гамме
+        let closestScaleNote = scale[0];
+        let minDiff = 100;
+        scale.forEach(s => {
+           if (Math.abs(noteInOctave - s) < minDiff) {
+               minDiff = Math.abs(noteInOctave - s);
+               closestScaleNote = s;
+           }
+        });
+        
+        let finalNoteIdx = octave * 12 + closestScaleNote;
+        let freq = BASE_FREQ[CHROMATIC[finalNoteIdx % 12]] || 440;
+        if (finalNoteIdx >= 12) freq *= 2; // Вторая октава
 
-      playHead++;
-      
-      // Небольшая рандомизация ритма
-      let nextDelay = tempo + (Math.random() * 40 - 20); 
-      setTimeout(playNextNote, nextDelay);
+        // Играем мелодию (иногда с паузой, чтобы не было каши)
+        if (Math.random() > 0.2) {
+           playTone(freq, 0.3, 0.12, 'triangle');
+        }
+
+        // Отображаем на экране
+        noteEl.textContent = CHROMATIC[finalNoteIdx % 12];
+        historyEl.textContent = "Бит: " + Math.floor(step/2) + " | Нота: " + CHROMATIC[finalNoteIdx % 12];
+      }
+
+      step++;
+      setTimeout(playNextStep, stepTime);
     }
 
-    playNextNote();
+    playNextStep();
   }, 1000);
 }
 
