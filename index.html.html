@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Скрябин: картина → музыка</title>
+<style>
+  body { margin:0; background:#111; color:#eee; font-family:sans-serif; text-align:center; }
+  video { width:100%; max-width:480px; border-radius:12px; margin-top:12px; }
+  #note { font-size:2em; margin:12px; }
+  #color { width:80px; height:80px; border-radius:50%; display:inline-block; border:2px solid #fff; }
+  button { padding:12px 24px; font-size:1em; border-radius:8px; border:none; background:#4a9; color:#000; margin:8px; }
+</style>
+</head>
+<body>
+<h2>Наведи камеру на картину</h2>
+<video id="cam" autoplay playsinline></video>
+<div>
+  <div id="color"></div>
+  <div id="note">—</div>
+</div>
+<button id="start">Включить камеру</button>
+<button id="stop">Стоп</button>
+
+<script>
+// Таблица Скрябина: нота → цвет (RGB)
+const SKRYABIN = [
+  { note: 'C',  name: 'до',        rgb: [255, 0, 0] },      // красный
+  { note: 'G',  name: 'соль',      rgb: [255, 128, 80] },   // оранжево-розовый
+  { note: 'D',  name: 'ре',        rgb: [255, 255, 0] },    // жёлтый
+  { note: 'A',  name: 'ля',        rgb: [0, 255, 0] },      // зелёный
+  { note: 'E',  name: 'ми',        rgb: [180, 220, 255] },  // бело-голубой
+  { note: 'B',  name: 'си',        rgb: [180, 220, 255] },  // похож на E
+  { note: 'F#', name: 'фа-диез',   rgb: [0, 0, 255] },      // ярко-синий
+  { note: 'Db', name: 'ре-бемоль', rgb: [128, 0, 128] },    // фиолетовый
+  { note: 'Ab', name: 'ля-бемоль', rgb: [160, 0, 200] },    // пурпурно-фиолетовый
+  { note: 'Eb', name: 'ми-бемоль', rgb: [150, 150, 160] },  // стальной
+  { note: 'Bb', name: 'си-бемоль', rgb: [150, 150, 160] },  // похож на Eb
+  { note: 'F',  name: 'фа',        rgb: [139, 0, 0] }       // тёмно-красный
+];
+
+// Частоты нот (первая октава)
+const FREQ = {
+  'C': 261.63, 'D': 293.66, 'E': 329.63, 'F': 349.23,
+  'G': 392.00, 'A': 440.00, 'B': 493.88,
+  'Db': 277.18, 'Eb': 311.13, 'F#': 369.99, 'Ab': 415.30, 'Bb': 466.16
+};
+
+const video = document.getElementById('cam');
+const noteEl = document.getElementById('note');
+const colorEl = document.getElementById('color');
+let stream = null, interval = null, audioCtx = null;
+
+function nearestNote(r, g, b) {
+  let best = null, bestDist = Infinity;
+  for (const s of SKRYABIN) {
+    const dr = r - s.rgb[0], dg = g - s.rgb[1], db = b - s.rgb[2];
+    const d = dr*dr + dg*dg + db*db;
+    if (d < bestDist) { bestDist = d; best = s; }
+  }
+  return best;
+}
+
+function playNote(note) {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = FREQ[note.note] || 440;
+  gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.8);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.8);
+}
+
+function analyze() {
+  if (!video.videoWidth) return;
+  const canvas = document.createElement('canvas');
+  canvas.width = 64; canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, 64, 64);
+  const data = ctx.getImageData(0, 0, 64, 64).data;
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    r += data[i]; g += data[i+1]; b += data[i+2]; n++;
+  }
+  r = Math.round(r/n); g = Math.round(g/n); b = Math.round(b/n);
+  colorEl.style.background = `rgb(${r},${g},${b})`;
+  const note = nearestNote(r, g, b);
+  noteEl.textContent = `${note.name} (${note.note})`;
+  playNote(note);
+}
+
+document.getElementById('start').onclick = async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    video.srcObject = stream;
+    interval = setInterval(analyze, 1500); // каждые 1.5 сек — новая нота
+  } catch (e) {
+    alert('Камера недоступна: ' + e.message);
+  }
+};
+
+document.getElementById('stop').onclick = () => {
+  if (interval) clearInterval(interval);
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  noteEl.textContent = '—';
+};
+</script>
+</body>
+</html>
