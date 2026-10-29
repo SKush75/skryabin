@@ -6,15 +6,15 @@
 <title>Скрябин: Генератор мелодии</title>
 <style>
   body { margin:0; background:#111; color:#eee; font-family:sans-serif; text-align:center; }
-  .video-container { position: relative; display: inline-block; max-width:400px; width: 100%; overflow: hidden; border-radius:12px; margin-top:12px; border: 2px solid #333; }
-  video { width:100%; display: block; }
+  .video-container { position: relative; display: inline-block; max-width:100%; width: 90vw; max-width: 500px; overflow: hidden; border-radius:12px; margin-top:12px; border: 2px solid #333; }
+  video { width:100%; display: block; object-fit: cover; }
   
   #scanner-line { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
-  .scan-dot { position: absolute; width: 6px; height: 6px; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 4px rgba(255,255,255,0.8); }
+  .scan-dot { position: absolute; width: 4px; height: 4px; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 3px rgba(255,255,255,0.8); }
   
   #note { font-size:1.5em; margin:12px; height: 30px; font-weight: bold; color: #4a9; }
   #color { width:30px; height:30px; border-radius:50%; display:inline-block; border:2px solid #fff; vertical-align: middle; margin-right: 10px;}
-  button { padding:12px 24px; font-size:1em; border-radius:8px; border:none; background:#4a9; color:#000; margin:8px; font-weight: bold; cursor:pointer;}
+  button { padding:12px 20px; font-size:0.95em; border-radius:8px; border:none; background:#4a9; color:#000; margin:5px; font-weight: bold; cursor:pointer;}
   button:disabled { background: #555; color: #888; cursor: not-allowed; }
   #unlock { background: #d35400; color: white; display: none; margin-top: 10px; width: 80%; max-width: 300px; }
   #history { font-size: 0.85em; color: #888; margin-top: 10px; word-wrap: break-word; padding: 0 15px; height: 50px; overflow-y: auto;}
@@ -110,7 +110,7 @@ function playTone(freq, duration = 0.5, vol = 0.2, type = 'triangle') {
   
   const now = audioCtx.currentTime;
   gain.gain.setValueAtTime(0.001, now);
-  gain.gain.exponentialRampToValueAtTime(vol, now + 0.05);
+  gain.gain.exponentialRampToValueAtTime(vol, now + 0.02);
   gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
   
   osc.connect(gain).connect(audioCtx.destination);
@@ -124,15 +124,16 @@ function startScan() {
   collectedNotes = [];
   stepIndex = 0;
   scanBtn.disabled = true;
-  statusEl.textContent = "Считывание цветов...";
+  statusEl.textContent = "Считывание...";
   historyEl.textContent = "";
   scannerLine.innerHTML = "";
 
-  // УВЕЛИЧИЛИ КОЛИЧЕСТВО ТОЧЕК
-  const totalSteps = 64; 
+  // Сетка 10 на 10 = 100 точек
+  const gridX = 10; 
+  const gridY = 10;
+  const totalSteps = gridX * gridY; 
   let currentStep = 0;
 
-  // Ускорили интервал, чтобы 64 точки проходили не слишком долго
   const scanInterval = setInterval(() => {
     if (currentStep >= totalSteps) {
       clearInterval(scanInterval);
@@ -141,8 +142,13 @@ function startScan() {
       return;
     }
 
-    const xPercent = (currentStep / (totalSteps - 1)) * 100;
-    const yPercent = 50 + Math.sin(currentStep * 0.5) * 25; // Волна стала чуть шире
+    // Вычисляем позицию по сетке
+    const col = currentStep % gridX;
+    const row = Math.floor(currentStep / gridX);
+    
+    // Идут слева направо, строка за строкой
+    const xPercent = (col / (gridX - 1)) * 100;
+    const yPercent = (row / (gridY - 1)) * 100;
 
     const dot = document.createElement('div');
     dot.className = 'scan-dot';
@@ -157,10 +163,8 @@ function startScan() {
     ctx.drawImage(video, 0, 0, 64, 64);
     const data = ctx.getImageData(0, 0, 64, 64).data;
 
-    // Уменьшили разброс пикселя, так как точек стало больше (меньше хаоса)
-    const offset = Math.floor(Math.random() * 2) - 1; 
-    const px = Math.max(0, Math.min(63, Math.floor((xPercent / 100) * 63) + offset));
-    const py = Math.max(0, Math.min(63, Math.floor((yPercent / 100) * 63) + offset));
+    const px = Math.max(0, Math.min(63, Math.floor((xPercent / 100) * 63)));
+    const py = Math.max(0, Math.min(63, Math.floor((yPercent / 100) * 63)));
     const i = (py * 64 + px) * 4;
     const r = data[i], g = data[i+1], b = data[i+2];
 
@@ -177,16 +181,16 @@ function startScan() {
     if (stepType === 'SHARP' || stepType === 'SHARP_OCTAVE') finalFreq *= 1.05946;
     if (stepType === 'OCTAVE' || stepType === 'SHARP_OCTAVE') finalFreq *= 2;
 
-    playTone(finalFreq, 0.15, 0.08, 'sine'); // Звук сканера стал короче и тише
+    playTone(finalFreq, 0.1, 0.05, 'sine');
     collectedNotes.push({ base: baseNote.note, freq: finalFreq, brightness: brightness });
 
     currentStep++;
     stepIndex++;
-  }, 60); // Быстрее (60 мс вместо 120)
+  }, 30); // Очень быстро (30 мс на точку, весь скан за 3 секунды)
 }
 
 function generateMelody() {
-  statusEl.textContent = "Импровизация...";
+  statusEl.textContent = "Играем...";
   noteEl.textContent = "Думаю...";
   
   setTimeout(() => {
@@ -212,12 +216,11 @@ function generateMelody() {
     statusEl.textContent = `Тональность: ${tonic} (${scaleType === 'major' ? 'светлая' : 'мрачная'})`;
 
     let playHead = 0;
-    let baseDelay = 200; // Темп стал быстрее, так как нот больше
-    let chordInterval = Math.floor(Math.random() * 4) + 2; 
+    // Очень быстрый темп воспроизведения
+    let baseDelay = 100; 
+    let chordInterval = Math.floor(Math.random() * 3) + 2; 
 
     function playNextNote() {
-      // Чтобы 64 ноты не играли слишком долго, играем не все подряд, 
-      // а "прореживаем" (например, каждую вторую)
       if (playHead >= collectedNotes.length) {
         statusEl.textContent = "Готово!";
         scanBtn.disabled = false;
@@ -227,8 +230,8 @@ function generateMelody() {
 
       const current = collectedNotes[playHead];
       
-      let duration = 0.3 + Math.random() * 0.3; 
-      let vol = 0.15 + (current.brightness / 255) * 0.15;
+      let duration = 0.2 + Math.random() * 0.2; 
+      let vol = 0.1 + (current.brightness / 255) * 0.15;
       
       playTone(current.freq, duration, vol, 'triangle');
       
@@ -237,13 +240,13 @@ function generateMelody() {
         let harmonyFreq = current.freq * Math.pow(2, stepShift / 12);
         if (Math.random() > 0.5) harmonyFreq /= 2;
         
-        playTone(harmonyFreq, duration * 1.5, 0.1, 'sine');
+        playTone(harmonyFreq, duration * 1.5, 0.08, 'sine');
       }
 
       noteEl.textContent = current.base;
-      playHead += 2; // Играем каждую вторую ноту для динамики
+      playHead += 1; // Играем ВСЕ 100 нот подряд
       
-      let nextDelay = baseDelay + (Math.random() * 80 - 40); 
+      let nextDelay = baseDelay + (Math.random() * 50 - 25); 
       setTimeout(playNextNote, nextDelay);
     }
 
