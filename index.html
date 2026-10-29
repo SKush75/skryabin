@@ -10,7 +10,6 @@
   video { width:100%; display: block; object-fit: cover; }
   
   #scanner-line { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
-  /* Точки стали меньше (3px) */
   .scan-dot { position: absolute; width: 3px; height: 3px; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 2px rgba(255,255,255,0.8); }
   
   #note { font-size:1.5em; margin:12px; height: 30px; font-weight: bold; color: #4a9; }
@@ -86,7 +85,7 @@ unlockBtn.onclick = () => {
   audioCtx.resume().then(() => {
     unlockBtn.style.display = 'none';
     scanBtn.disabled = false;
-    playTone(440, 0.5, 0.1, 'sine'); 
+    playInstrument(440, 0.5, 0.1, 'sine'); 
   });
 };
 
@@ -100,7 +99,8 @@ function nearestNote(r, g, b) {
   return best;
 }
 
-function playTone(freq, duration = 0.5, vol = 0.2, type = 'sine') {
+// Универсальный синтезатор с разными тембрами (инструментами)
+function playInstrument(freq, duration = 0.5, vol = 0.2, type = 'sine') {
   if (!audioCtx) return;
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
@@ -109,10 +109,18 @@ function playTone(freq, duration = 0.5, vol = 0.2, type = 'sine') {
   
   const now = audioCtx.currentTime;
   gain.gain.setValueAtTime(0.001, now);
+  
+  // Разная атака для разных инструментов
   if (type === 'sine' && freq < 150) {
-    gain.gain.linearRampToValueAtTime(vol, now + 0.01);
+    // Бас (низкий) - резкая атака, быстрое затухание
+    gain.gain.linearRampToValueAtTime(vol, now + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+  } else if (type === 'sine') {
+    // Аккорды (фоновые) - очень плавные, тянутся
+    gain.gain.linearRampToValueAtTime(vol, now + duration * 0.5);
+    gain.gain.linearRampToValueAtTime(0.001, now + duration);
   } else {
+    // Мелодия (соло) - четкая атака
     gain.gain.linearRampToValueAtTime(vol, now + 0.05);
     gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
   }
@@ -131,7 +139,6 @@ function startScan() {
   historyEl.textContent = "";
   scannerLine.innerHTML = "";
 
-  // УВЕЛИЧИЛИ СЕТКУ В ДВА РАЗА (14 на 14 = 196 точек)
   const gridX = 14; 
   const gridY = 14;
   const totalSteps = gridX * gridY; 
@@ -177,16 +184,17 @@ function startScan() {
     collectedNotes.push({ base: baseNote.note, brightness: brightness });
 
     currentStep++;
-  }, 15); // Ускорили до 15 мс (196 точек за ~3 секунды)
+  }, 15); 
 }
 
 function generateMusic() {
-  statusEl.textContent = "Создание бита...";
+  statusEl.textContent = "Создание композиции...";
   noteEl.textContent = "Думаю...";
   
   setTimeout(() => {
     if (collectedNotes.length === 0) return;
 
+    // 1. Определяем тональность
     const counts = {};
     let totalBrightness = 0;
     collectedNotes.forEach(n => {
@@ -205,30 +213,49 @@ function generateMusic() {
     const scaleType = avgBrightness > 127 ? 'major' : 'minor';
     const scale = SCALES[scaleType];
     
-    statusEl.textContent = `Тональность: ${tonic} (${scaleType === 'major' ? 'светлая' : 'мрачная'})`;
+    statusEl.textContent = `Тональность: ${tonic} (${scaleType})`;
 
-    let bassNotes = collectedNotes.filter(n => n.brightness < 80); 
-    let melodyNotes = collectedNotes.filter(n => n.brightness >= 80);
+    // 2. Сортируем ноты по яркости, чтобы разделить на инструменты
+    let sortedByBrightness = [...collectedNotes].sort((a,b) => a.brightness - b.brightness);
+    
+    // Бас (самые темные 25%)
+    let bassNotes = sortedByBrightness.slice(0, Math.floor(sortedByBrightness.length * 0.25));
+    // Аккорды (средние 50%)
+    let chordNotes = sortedByBrightness.slice(Math.floor(sortedByBrightness.length * 0.25), Math.floor(sortedByBrightness.length * 0.75));
+    // Мелодия (самые яркие 25%)
+    let melodyNotes = sortedByBrightness.slice(Math.floor(sortedByBrightness.length * 0.75));
 
-    if (bassNotes.length < 4) {
-        bassNotes = [...collectedNotes].sort((a,b) => a.brightness - b.brightness).slice(0, 8);
-    }
-    if (melodyNotes.length < 4) {
-        melodyNotes = [...collectedNotes].sort((a,b) => b.brightness - a.brightness).slice(0, 16);
-    }
-
-    const melodySequence = melodyNotes.map(n => {
-      let noteIdx = CHROMATIC.indexOf(n.base);
+    // Функция для привязки ноты к гамме
+    function fitToScale(noteName) {
+      let noteIdx = CHROMATIC.indexOf(noteName);
       if (noteIdx < tonicIdx) noteIdx += 12; 
-      return noteIdx;
-    });
+      let octave = Math.floor(noteIdx / 12);
+      let noteInOctave = noteIdx % 12;
+      
+      let closestScaleNote = scale[0];
+      let minDiff = 100;
+      scale.forEach(s => {
+         if (Math.abs(noteInOctave - s) < minDiff) {
+             minDiff = Math.abs(noteInOctave - s);
+             closestScaleNote = s;
+         }
+      });
+      return octave * 12 + closestScaleNote;
+    }
 
     let step = 0;
-    const bpm = 120; 
-    const stepTime = 60000 / bpm / 2; 
+    const bpm = 100; // Чуть медленнее для атмосферности
+    const stepTime = 60000 / bpm / 2; // Восьмые ноты
+
+    // Генерируем аккорды заранее (каждые 4 шага будет новый аккорд)
+    let chordProgression = [];
+    for (let i = 0; i < 8; i++) {
+       let randomChordNote = chordNotes.length > 0 ? chordNotes[Math.floor(Math.random() * chordNotes.length)].base : tonic;
+       chordProgression.push(fitToScale(randomChordNote));
+    }
 
     function playNextStep() {
-      // Ограничиваем длительность (32 шага = 16 секунд)
+      // Композиция длится 32 шага (около 16 секунд)
       if (step >= 32) {
         statusEl.textContent = "Готово!";
         scanBtn.disabled = false;
@@ -236,39 +263,51 @@ function generateMusic() {
         return;
       }
 
+      // --- 1. БАС (играет каждые 4 шага) ---
       if (step % 4 === 0) {
-        const bassColor = bassNotes[Math.floor(Math.random() * bassNotes.length)];
-        let bassNoteIdx = CHROMATIC.indexOf(bassColor.base);
-        let bassFreq = (BASE_FREQ[CHROMATIC[bassNoteIdx % 12]] || 440) / 4; 
-        let bassVol = 0.15 + ((255 - bassColor.brightness) / 255) * 0.2;
-        playTone(bassFreq, 0.4, bassVol, 'sine');
+        if (bassNotes.length > 0) {
+          const bassColor = bassNotes[Math.floor(Math.random() * bassNotes.length)];
+          let bassNoteIdx = CHROMATIC.indexOf(bassColor.base);
+          let bassFreq = (BASE_FREQ[CHROMATIC[bassNoteIdx % 12]] || 440) / 4; 
+          let bassVol = 0.2 + ((255 - bassColor.brightness) / 255) * 0.2;
+          // Бас тянется долго (1 секунду)
+          playInstrument(bassFreq, 1.0, bassVol, 'sine');
+        }
       }
 
-      if (step % 2 === 0 && melodySequence.length > 0) {
-        let noteIdx = melodySequence[(step / 2) % melodySequence.length];
-        
-        let octave = Math.floor(noteIdx / 12);
-        let noteInOctave = noteIdx % 12;
-        
-        let closestScaleNote = scale[0];
-        let minDiff = 100;
-        scale.forEach(s => {
-           if (Math.abs(noteInOctave - s) < minDiff) {
-               minDiff = Math.abs(noteInOctave - s);
-               closestScaleNote = s;
-           }
-        });
-        
-        let finalNoteIdx = octave * 12 + closestScaleNote;
-        let freq = BASE_FREQ[CHROMATIC[finalNoteIdx % 12]] || 440;
-        if (finalNoteIdx >= 12) freq *= 2; 
+      // --- 2. АККОРДЫ (начинают играть каждые 8 шагов и тянутся) ---
+      if (step % 8 === 0) {
+         let chordRootIdx = chordProgression[Math.floor(step / 8) % chordProgression.length];
+         // Играем трезвучие (3 ноты одновременно)
+         let chordRootFreq = BASE_FREQ[CHROMATIC[chordRootIdx % 12]] || 440;
+         if (chordRootIdx >= 12) chordRootFreq *= 2;
+         
+         // Терция (через 3 или 4 полутона)
+         let thirdInterval = scaleType === 'major' ? 4 : 3;
+         let thirdFreq = chordRootFreq * Math.pow(2, thirdInterval / 12);
+         // Квинта (через 7 полутонов)
+         let fifthFreq = chordRootFreq * Math.pow(2, 7 / 12);
+         
+         // Играем все три ноты аккорда одновременно и тянем их (2 секунды)
+         playInstrument(chordRootFreq, 2.0, 0.08, 'sine');
+         playInstrument(thirdFreq, 2.0, 0.06, 'sine');
+         playInstrument(fifthFreq, 2.0, 0.05, 'sine');
+      }
 
-        if (Math.random() > 0.2) {
-           playTone(freq, 0.3, 0.12, 'triangle');
+      // --- 3. МЕЛОДИЯ (Соло - играет каждые 2 шага, иногда с паузами) ---
+      if (step % 2 === 0 && melodyNotes.length > 0) {
+        // 70% вероятность, что нота сыграет (создает "живой" ритм)
+        if (Math.random() > 0.3) {
+           let melodyColor = melodyNotes[Math.floor(Math.random() * melodyNotes.length)];
+           let finalNoteIdx = fitToScale(melodyColor.base);
+           let freq = BASE_FREQ[CHROMATIC[finalNoteIdx % 12]] || 440;
+           if (finalNoteIdx >= 12) freq *= 2; 
+
+           playInstrument(freq, 0.4, 0.15, 'triangle');
+           
+           noteEl.textContent = CHROMATIC[finalNoteIdx % 12];
+           historyEl.textContent = "Трио: Бас + Аккорд + Соло";
         }
-
-        noteEl.textContent = CHROMATIC[finalNoteIdx % 12];
-        historyEl.textContent = "Бит: " + Math.floor(step/2) + " | Нота: " + CHROMATIC[finalNoteIdx % 12];
       }
 
       step++;
